@@ -21,14 +21,28 @@ jobs:
         id: package-info
         run: |
           # Extract package name from tag (assuming format: package-name-vX.Y.Z)
-          TAG_NAME="${{ github.event.release.tag_name }}"
-          
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG_NAME="${{ github.event.release.tag_name }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # For workflow_dispatch, use the ref name (should be a tag)
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+              TAG_NAME="${{ github.ref_name }}"
+            else
+              echo "Error: workflow_dispatch must be run on a tag, not a branch"
+              exit 1
+            fi
+          else
+            echo "Error: Unsupported event type: ${{ github.event_name }}"
+            exit 1
+          fi
+
           # Match package-name-vX.Y.Z format
           if [[ $TAG_NAME =~ ^([^-]+(-[^-]+)*)-v([0-9]+\.[0-9]+\.[0-9]+.*)$ ]]; then
             PACKAGE_NAME="${BASH_REMATCH[1]}"
             VERSION="${BASH_REMATCH[3]}"
           else
             echo "Error: Tag format not recognized. Expected format: package-name-vX.Y.Z"
+            echo "Received tag: $TAG_NAME"
             exit 1
           fi
           
