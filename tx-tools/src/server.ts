@@ -52,7 +52,8 @@ server.tool(
       subtype of Procedure (71388002))`),
   },
   async ({ filter, url }) => {
-    const serverBase = process.env.TX_SERVER ?? "https://tx.ontoserver.csiro.au/fhir";
+    const serverBase =
+      process.env.TX_SERVER ?? "https://tx.ontoserver.csiro.au/fhir";
 
     const expandUrl = new URL(`${serverBase}/ValueSet/$expand`);
     expandUrl.searchParams.set("url", url);
@@ -117,17 +118,29 @@ server.tool(
   Returns validation result including whether the code is valid and its display text.
   `,
   {
-    system: z.string().describe("The code system URI (e.g. 'http://snomed.info/sct', 'http://loinc.org')"),
-    code: z.string().describe("The code to validate (e.g. '30371007', '72133-2')"),
+    system: z
+      .string()
+      .describe(
+        "The code system URI (e.g. 'http://snomed.info/sct', 'http://loinc.org')",
+      ),
+    code: z
+      .string()
+      .describe("The code to validate (e.g. '30371007', '72133-2')"),
     url: z.string().describe(`ValueSet URL to validate against.
     Common values:
     - "http://snomed.info/sct?fhir_vs" (all of SNOMED CT)
     - "http://loinc.org/vs" (all of LOINC)
     - A specific value set URL from a FHIR profile binding`),
-    version: z.string().optional().describe("Optional version of the code system (e.g. 'http://snomed.info/sct/32506021000036107/version/20250831')"),
+    version: z
+      .string()
+      .optional()
+      .describe(
+        "Optional version of the code system (e.g. 'http://snomed.info/sct/32506021000036107/version/20250831')",
+      ),
   },
   async ({ system, code, url, version }) => {
-    const serverBase = process.env.TX_SERVER ?? "https://tx.ontoserver.csiro.au/fhir";
+    const serverBase =
+      process.env.TX_SERVER ?? "https://tx.ontoserver.csiro.au/fhir";
 
     const validateUrl = new URL(`${serverBase}/ValueSet/$validate-code`);
     validateUrl.searchParams.set("url", url);
@@ -161,11 +174,11 @@ server.tool(
       const result = (await response.json()) as Parameters;
 
       // Extract validation result from Parameters resource
-      const resultParam = result.parameter?.find(p => p.name === "result");
-      const displayParam = result.parameter?.find(p => p.name === "display");
-      const codeParam = result.parameter?.find(p => p.name === "code");
-      const systemParam = result.parameter?.find(p => p.name === "system");
-      const versionParam = result.parameter?.find(p => p.name === "version");
+      const resultParam = result.parameter?.find((p) => p.name === "result");
+      const displayParam = result.parameter?.find((p) => p.name === "display");
+      const codeParam = result.parameter?.find((p) => p.name === "code");
+      const systemParam = result.parameter?.find((p) => p.name === "system");
+      const versionParam = result.parameter?.find((p) => p.name === "version");
 
       const validationResult = {
         valid: resultParam?.valueBoolean ?? false,
@@ -176,7 +189,9 @@ server.tool(
       };
 
       return {
-        content: [{ type: "text", text: JSON.stringify(validationResult, null, 2) }],
+        content: [
+          { type: "text", text: JSON.stringify(validationResult, null, 2) },
+        ],
       };
     } catch (error) {
       return {
