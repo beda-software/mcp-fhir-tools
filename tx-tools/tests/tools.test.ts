@@ -67,4 +67,107 @@ describe("Terminology Tools", () => {
     expect(response.isError).toBe(true);
     expect(response.content[0].text).toMatch(/Terminology server error/);
   });
+
+  test("validate-code returns valid result for a valid code", async () => {
+    const mockParameters = {
+      resourceType: "Parameters",
+      parameter: [
+        { name: "result", valueBoolean: true },
+        { name: "code", valueCode: "30371007" },
+        { name: "system", valueUri: "http://snomed.info/sct" },
+        { name: "version", valueString: "http://snomed.info/sct/32506021000036107/version/20250831" },
+        { name: "display", valueString: "Open fracture of base of skull with contusion and laceration of cerebrum" }
+      ]
+    };
+
+    (fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: async () => mockParameters,
+    });
+
+    const tool = server["_registeredTools"]["validate-code"];
+    const response = await tool.callback({
+      system: "http://snomed.info/sct",
+      code: "30371007",
+      url: "http://snomed.info/sct?fhir_vs",
+      version: "http://snomed.info/sct/32506021000036107/version/20250831"
+    });
+
+    const result = JSON.parse(response.content[0].text);
+    expect(result.valid).toBe(true);
+    expect(result.code).toBe("30371007");
+    expect(result.system).toBe("http://snomed.info/sct");
+    expect(result.display).toBe("Open fracture of base of skull with contusion and laceration of cerebrum");
+  });
+
+  test("validate-code returns invalid result for an invalid code", async () => {
+    const mockParameters = {
+      resourceType: "Parameters",
+      parameter: [
+        { name: "result", valueBoolean: false }
+      ]
+    };
+
+    (fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: async () => mockParameters,
+    });
+
+    const tool = server["_registeredTools"]["validate-code"];
+    const response = await tool.callback({
+      system: "http://snomed.info/sct",
+      code: "invalid-code",
+      url: "http://snomed.info/sct?fhir_vs"
+    });
+
+    const result = JSON.parse(response.content[0].text);
+    expect(result.valid).toBe(false);
+    expect(result.code).toBe("invalid-code");
+  });
+
+  test("validate-code works without optional version parameter", async () => {
+    const mockParameters = {
+      resourceType: "Parameters",
+      parameter: [
+        { name: "result", valueBoolean: true },
+        { name: "code", valueCode: "72133-2" },
+        { name: "system", valueUri: "http://loinc.org" },
+        { name: "display", valueString: "Respiratory rate" }
+      ]
+    };
+
+    (fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: async () => mockParameters,
+    });
+
+    const tool = server["_registeredTools"]["validate-code"];
+    const response = await tool.callback({
+      system: "http://loinc.org",
+      code: "72133-2",
+      url: "http://loinc.org/vs"
+    });
+
+    const result = JSON.parse(response.content[0].text);
+    expect(result.valid).toBe(true);
+    expect(result.version).toBeUndefined();
+  });
+
+  test("validate-code returns an error if the fetch response is not OK", async () => {
+    (fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 404,
+      text: async () => "ValueSet not found",
+    });
+
+    const tool = server["_registeredTools"]["validate-code"];
+    const response = await tool.callback({
+      system: "http://snomed.info/sct",
+      code: "12345",
+      url: "http://invalid-valueset-url"
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toMatch(/Terminology server error/);
+  });
 });

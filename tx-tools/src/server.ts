@@ -15,7 +15,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ValueSet } from "fhir/r4.js";
+import { Parameters, ValueSet } from "fhir/r4.js";
 import fetch from "node-fetch";
 import { z } from "zod";
 
@@ -100,6 +100,90 @@ server.tool(
           {
             type: "text",
             text: `Error looking up codes: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+);
+
+// Register validate-code tool
+server.tool(
+  "validate-code",
+  `
+  Validate whether a code is valid within a specified value set using a FHIR terminology server.
+  Use this to verify that a code is appropriate for a particular context or value set binding.
+  Returns validation result including whether the code is valid and its display text.
+  `,
+  {
+    system: z.string().describe("The code system URI (e.g. 'http://snomed.info/sct', 'http://loinc.org')"),
+    code: z.string().describe("The code to validate (e.g. '30371007', '72133-2')"),
+    url: z.string().describe(`ValueSet URL to validate against.
+    Common values:
+    - "http://snomed.info/sct?fhir_vs" (all of SNOMED CT)
+    - "http://loinc.org/vs" (all of LOINC)
+    - A specific value set URL from a FHIR profile binding`),
+    version: z.string().optional().describe("Optional version of the code system (e.g. 'http://snomed.info/sct/32506021000036107/version/20250831')"),
+  },
+  async ({ system, code, url, version }) => {
+    const serverBase = process.env.TX_SERVER ?? "https://tx.ontoserver.csiro.au/fhir";
+
+    const validateUrl = new URL(`${serverBase}/ValueSet/$validate-code`);
+    validateUrl.searchParams.set("url", url);
+    validateUrl.searchParams.set("system", system);
+    validateUrl.searchParams.set("code", code);
+    if (version) {
+      validateUrl.searchParams.set("version", version);
+    }
+
+    try {
+      const response = await fetch(validateUrl.toString(), {
+        method: "GET",
+        headers: {
+          Accept: "application/fhir+json",
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Terminology server error (${response.status}): ${errorText}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const result = (await response.json()) as Parameters;
+
+      // Extract validation result from Parameters resource
+      const resultParam = result.parameter?.find(p => p.name === "result");
+      const displayParam = result.parameter?.find(p => p.name === "display");
+      const codeParam = result.parameter?.find(p => p.name === "code");
+      const systemParam = result.parameter?.find(p => p.name === "system");
+      const versionParam = result.parameter?.find(p => p.name === "version");
+
+      const validationResult = {
+        valid: resultParam?.valueBoolean ?? false,
+        code: codeParam?.valueCode ?? code,
+        system: systemParam?.valueUri ?? system,
+        version: versionParam?.valueString,
+        display: displayParam?.valueString,
+      };
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(validationResult, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error validating code: ${error instanceof Error ? error.message : String(error)}`,
           },
         ],
         isError: true,
