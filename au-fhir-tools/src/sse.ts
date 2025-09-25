@@ -35,6 +35,8 @@ app.post("/messages", async (req, res) => {
   await transport.handlePostMessage(req, res);
 });
 
-app.listen(3002, () =>
-  logger.info("Australia FHIR Tools server listening on port 3002"),
+const appPort = process.env.PORT ?? 3002
+
+app.listen(appPort, () =>
+  logger.info(`Australia FHIR Tools server listening on port ${appPort}`),
 );
