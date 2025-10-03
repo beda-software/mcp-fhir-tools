@@ -1,19 +1,26 @@
-FROM node:lts
-
-RUN apt-get update && apt-get install -y openjdk-17-jdk
+FROM node:lts-alpine AS builder
 
 WORKDIR /app
 
 COPY package*.json ./
-
+RUN npm ci
 COPY . .
-
-RUN npm install
 
 RUN npm run build
 
-ENV PORT=8000
+FROM node:lts-alpine AS production
 
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=builder /app/dist ./dist
+
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
+USER nodejs
+
+ENV PORT=8000
 EXPOSE 8000
 
 CMD ["npm", "run", "start-sse"]
