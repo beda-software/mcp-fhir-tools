@@ -3,6 +3,7 @@ FROM node:lts-alpine AS builder
 WORKDIR /app
 
 COPY package*.json ./
+COPY bin/download-validator.js ./bin/download-validator.js
 RUN npm ci
 COPY . .
 
@@ -13,6 +14,7 @@ FROM node:lts-alpine AS production
 WORKDIR /app
 
 COPY package*.json ./
+COPY bin/download-validator.js ./bin/download-validator.js
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/dist ./dist
 
