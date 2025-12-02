@@ -33,7 +33,7 @@ app.get(`${basePath}/sse`, async (_req, res) => {
   logger.info("SSE transport connected");
 });
 
-app.post("/messages", async (req, res) => {
+app.post(`${basePath}/messages`, async (req, res) => {
   logger.debug("Received message", req);
   await transport.handlePostMessage(req, res);
 });
