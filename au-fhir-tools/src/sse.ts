@@ -18,7 +18,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
 import server from "./server.js";
 
-const appPort = process.env.PORT ?? 3002
+const appPort = process.env.PORT ?? 3002;
 const basePath = process.env.BASE_PATH ?? "";
 
 const logger = console;

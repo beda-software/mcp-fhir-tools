@@ -18,7 +18,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
 import server from "./server.js";
 
-const appPort = process.env.PORT ?? 3003
+const appPort = process.env.PORT ?? 3003;
 const basePath = process.env.BASE_PATH ?? "";
 
 const logger = console;
@@ -26,18 +26,23 @@ const app = express();
 
 let transport: SSEServerTransport;
 
-app.get(`${basePath}/sse`, async (_req: express.Request, res: express.Response) => {
-  logger.info("Received SSE connection request");
-  transport = new SSEServerTransport(`${basePath}/messages`, res);
-  await server.connect(transport);
-  logger.info("SSE transport connected");
-});
+app.get(
+  `${basePath}/sse`,
+  async (_req: express.Request, res: express.Response) => {
+    logger.info("Received SSE connection request");
+    transport = new SSEServerTransport(`${basePath}/messages`, res);
+    await server.connect(transport);
+    logger.info("SSE transport connected");
+  },
+);
 
-app.post(`${basePath}/messages`, async (req: express.Request, res: express.Response) => {
-  logger.debug("Received message", req);
-  await transport.handlePostMessage(req, res);
-});
-
+app.post(
+  `${basePath}/messages`,
+  async (req: express.Request, res: express.Response) => {
+    logger.debug("Received message", req);
+    await transport.handlePostMessage(req, res);
+  },
+);
 
 app.listen(appPort, () =>
   logger.info(`Generic FHIR Tools server listening on port ${appPort}`),

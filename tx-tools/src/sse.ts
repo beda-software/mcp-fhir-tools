@@ -18,7 +18,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
 import server from "./server.js";
 
-const appPort = process.env.PORT ?? 3001
+const appPort = process.env.PORT ?? 3001;
 const basePath = process.env.BASE_PATH ?? "";
 
 const logger = console;
@@ -37,7 +37,6 @@ app.post(`${basePath}/messages`, async (req, res) => {
   logger.debug("Received message", req);
   await transport.handlePostMessage(req, res);
 });
-
 
 app.listen(appPort, () =>
   logger.info(`Terminology Tools server listening on port ${appPort}`),
