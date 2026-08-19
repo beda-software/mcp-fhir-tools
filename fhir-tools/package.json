@@ -12,7 +12,7 @@
     "start-sse": "node dist/sse.js",
     "inspect-stdio": "npx @modelcontextprotocol/inspector bun src/stdio.ts",
     "inspect-sse": "npx @modelcontextprotocol/inspector bun src/sse.ts",
-    "test": "npx jest",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
     "lint": "npx eslint . --ext .ts,.js",
     "lint:fix": "npx eslint . --ext .ts,.js --fix",
     "format": "npx prettier --write \"**/*.{ts,js,json,md}\"",
@@ -37,11 +37,11 @@
   ],
   "license": "Apache-2.0",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/fhir": "^0.0.41",
     "express": "^4.21.2",
     "node-fetch": "^3.3.2",
-    "zod": "^3.22.4"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/express": "^5.0.1",
