@@ -32,6 +32,29 @@ export interface McpApp {
 }
 
 /**
+ * Express 4 does not forward a rejected promise from an async handler to error middleware, so an
+ * uncaught throw inside a route handler becomes an unhandled rejection that crashes the whole
+ * process, taking every other client's session down with it. Every route below therefore wraps
+ * its body in try/catch and reports failures through this instead of letting them escape.
+ */
+function respondWithInternalError(
+  logMessage: string,
+  error: unknown,
+  res: express.Response,
+): void {
+  logger.error(logMessage, error);
+  if (res.headersSent) {
+    if (!res.writableEnded) res.end();
+    return;
+  }
+  res.status(500).json({
+    jsonrpc: "2.0",
+    error: { code: -32603, message: "Internal server error" },
+    id: null,
+  });
+}
+
+/**
  * Builds the Express app serving the MCP HTTP transports, isolated from process-level concerns
  * (listening on a port, OS signal handling) so it can be exercised directly in tests.
  *
@@ -54,133 +77,177 @@ export function createApp(basePath = process.env.BASE_PATH ?? ""): McpApp {
   app.get(
     `${basePath}/sse`,
     async (req: express.Request, res: express.Response) => {
-      // A Streamable HTTP client (identified by the session header it carries) may open a GET
-      // here after initializing over POST, to receive server-initiated push notifications on
-      // the same session. Legacy clients never send this header, so its absence means "open a
-      // new legacy SSE stream" as before.
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
-      if (sessionId) {
-        const transport = transports[sessionId];
-        if (!(transport instanceof StreamableHTTPServerTransport)) {
-          res.status(400).json({
-            jsonrpc: "2.0",
-            error: {
-              code: -32000,
-              message: "Bad Request: No valid session ID provided",
-            },
-            id: null,
-          });
+      try {
+        // A Streamable HTTP client (identified by the session header it carries) may open a GET
+        // here after initializing over POST, to receive server-initiated push notifications on
+        // the same session. Legacy clients never send this header, so its absence means "open a
+        // new legacy SSE stream" as before.
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+        if (sessionId) {
+          const transport = transports[sessionId];
+          if (!(transport instanceof StreamableHTTPServerTransport)) {
+            res.status(400).json({
+              jsonrpc: "2.0",
+              error: {
+                code: -32000,
+                message: "Bad Request: No valid session ID provided",
+              },
+              id: null,
+            });
+            return;
+          }
+          await transport.handleRequest(req, res);
           return;
         }
-        await transport.handleRequest(req, res);
-        return;
-      }
 
-      logger.info("Received legacy SSE connection request");
-      const transport = new SSEServerTransport(`${basePath}/messages`, res);
-      transports[transport.sessionId] = transport;
-      res.on("close", () => {
-        delete transports[transport.sessionId];
-      });
-      await createServer().connect(transport);
-      logger.info(`Legacy SSE transport connected: ${transport.sessionId}`);
+        logger.info("Received legacy SSE connection request");
+        const transport = new SSEServerTransport(`${basePath}/messages`, res);
+        transports[transport.sessionId] = transport;
+        res.on("close", () => {
+          delete transports[transport.sessionId];
+        });
+        try {
+          await createServer().connect(transport);
+        } catch (error) {
+          delete transports[transport.sessionId];
+          throw error;
+        }
+        logger.info(`Legacy SSE transport connected: ${transport.sessionId}`);
+      } catch (error) {
+        respondWithInternalError(
+          "Error handling GET /sse request:",
+          error,
+          res,
+        );
+      }
     },
   );
 
   app.post(
     `${basePath}/messages`,
     async (req: express.Request, res: express.Response) => {
-      logger.debug("Received message", req);
-      const sessionId = req.query.sessionId as string | undefined;
-      const transport = sessionId ? transports[sessionId] : undefined;
+      try {
+        logger.debug("Received message", req);
+        const sessionId = req.query.sessionId as string | undefined;
+        const transport = sessionId ? transports[sessionId] : undefined;
 
-      if (!(transport instanceof SSEServerTransport)) {
-        res.status(400).json({
-          jsonrpc: "2.0",
-          error: {
-            code: -32000,
-            message:
-              "Bad Request: No SSE connection found for the given sessionId",
-          },
-          id: null,
-        });
-        return;
-      }
-
-      await transport.handlePostMessage(req, res, req.body);
-    },
-  );
-
-  app.post(
-    `${basePath}/sse`,
-    async (req: express.Request, res: express.Response) => {
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
-      let transport = sessionId ? transports[sessionId] : undefined;
-
-      if (transport && !(transport instanceof StreamableHTTPServerTransport)) {
-        res.status(400).json({
-          jsonrpc: "2.0",
-          error: {
-            code: -32000,
-            message:
-              "Bad Request: Session exists but uses a different transport protocol",
-          },
-          id: null,
-        });
-        return;
-      }
-
-      if (!transport) {
-        if (sessionId || !isInitializeRequest(req.body)) {
+        if (!(transport instanceof SSEServerTransport)) {
           res.status(400).json({
             jsonrpc: "2.0",
             error: {
               code: -32000,
-              message: "Bad Request: No valid session ID provided",
+              message:
+                "Bad Request: No SSE connection found for the given sessionId",
             },
             id: null,
           });
           return;
         }
 
-        const newTransport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (id) => {
-            logger.info(`Streamable HTTP session initialized: ${id}`);
-            transports[id] = newTransport;
-          },
-        });
-        newTransport.onclose = () => {
-          const id = newTransport.sessionId;
-          if (id) {
-            logger.info(`Streamable HTTP transport closed: ${id}`);
-            delete transports[id];
-          }
-        };
-        await createServer().connect(newTransport);
-        transport = newTransport;
+        await transport.handlePostMessage(req, res, req.body);
+      } catch (error) {
+        respondWithInternalError(
+          "Error handling POST /messages request:",
+          error,
+          res,
+        );
       }
+    },
+  );
 
-      await transport.handleRequest(req, res, req.body);
+  app.post(
+    `${basePath}/sse`,
+    async (req: express.Request, res: express.Response) => {
+      let newTransport: StreamableHTTPServerTransport | undefined;
+      try {
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+        let transport = sessionId ? transports[sessionId] : undefined;
+
+        if (
+          transport &&
+          !(transport instanceof StreamableHTTPServerTransport)
+        ) {
+          res.status(400).json({
+            jsonrpc: "2.0",
+            error: {
+              code: -32000,
+              message:
+                "Bad Request: Session exists but uses a different transport protocol",
+            },
+            id: null,
+          });
+          return;
+        }
+
+        if (!transport) {
+          if (sessionId || !isInitializeRequest(req.body)) {
+            res.status(400).json({
+              jsonrpc: "2.0",
+              error: {
+                code: -32000,
+                message: "Bad Request: No valid session ID provided",
+              },
+              id: null,
+            });
+            return;
+          }
+
+          newTransport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (id) => {
+              logger.info(`Streamable HTTP session initialized: ${id}`);
+              transports[id] = newTransport as StreamableHTTPServerTransport;
+            },
+          });
+          newTransport.onclose = () => {
+            const id = newTransport?.sessionId;
+            if (id) {
+              logger.info(`Streamable HTTP transport closed: ${id}`);
+              delete transports[id];
+            }
+          };
+          await createServer().connect(newTransport);
+          transport = newTransport;
+        }
+
+        await transport.handleRequest(req, res, req.body);
+      } catch (error) {
+        if (newTransport?.sessionId) {
+          delete transports[newTransport.sessionId];
+        }
+        respondWithInternalError(
+          "Error handling POST /sse request:",
+          error,
+          res,
+        );
+      }
     },
   );
 
   app.delete(
     `${basePath}/sse`,
     async (req: express.Request, res: express.Response) => {
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
-      const transport = sessionId ? transports[sessionId] : undefined;
+      try {
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+        const transport = sessionId ? transports[sessionId] : undefined;
 
-      if (!(transport instanceof StreamableHTTPServerTransport)) {
-        res
-          .status(400)
-          .send(
-            "No active Streamable HTTP session found for the given session ID",
-          );
-        return;
+        if (!(transport instanceof StreamableHTTPServerTransport)) {
+          res
+            .status(400)
+            .send(
+              "No active Streamable HTTP session found for the given session ID",
+            );
+          return;
+        }
+
+        await transport.handleRequest(req, res);
+      } catch (error) {
+        respondWithInternalError(
+          "Error handling DELETE /sse request:",
+          error,
+          res,
+        );
       }
-
-      await transport.handleRequest(req, res);
     },
   );
 

@@ -95,9 +95,11 @@ export default function createServer(): McpServer {
         ),
     },
     async ({ resource, fhirVersion, snomedVersion, txServer }) => {
+      // Declared outside the try block so the finally clause below can always attempt cleanup,
+      // including when execFile itself fails (java missing, validator crash, timeout, etc).
+      const tempFile = `/tmp/resource-${crypto.randomUUID()}.json`;
       try {
         // Create a temporary file to store the resource
-        const tempFile = `/tmp/resource-${crypto.randomUUID()}.json`;
         await fs.promises.writeFile(tempFile, resource);
 
         // Determine the path to the validator JAR
@@ -140,9 +142,6 @@ export default function createServer(): McpServer {
             }
           });
         });
-
-        // Clean up temp file
-        await fs.promises.unlink(tempFile);
 
         // Process the output
         const output = stdout || stderr;
@@ -189,6 +188,10 @@ export default function createServer(): McpServer {
           content: [{ type: "text", text: result }],
           isError: true,
         };
+      } finally {
+        await fs.promises.unlink(tempFile).catch(() => {
+          // Best-effort cleanup: nothing to do if the file was never created or is already gone.
+        });
       }
     },
   );

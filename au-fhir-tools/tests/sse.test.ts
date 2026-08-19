@@ -19,6 +19,7 @@ import type { Server } from "http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { createApp, McpApp } from "../src/app";
 
 /**
@@ -231,6 +232,26 @@ describe("MCP HTTP transports", () => {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
       });
       expect(response.status).toBe(400);
+    });
+
+    test("returns 500 instead of crashing the process when the transport throws unexpectedly", async () => {
+      const legacySession = await openLegacySseSession();
+      const spy = jest
+        .spyOn(SSEServerTransport.prototype, "handlePostMessage")
+        .mockRejectedValueOnce(new Error("boom"));
+      try {
+        const messagesUrl = new URL(`http://${baseUrl.host}/messages`);
+        messagesUrl.searchParams.set("sessionId", legacySession.sessionId);
+        const response = await fetch(messagesUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+        });
+        expect(response.status).toBe(500);
+      } finally {
+        spy.mockRestore();
+        legacySession.close();
+      }
     });
 
     test("keeps two concurrent sessions independent (regression: sessions used to be shared globally)", async () => {
