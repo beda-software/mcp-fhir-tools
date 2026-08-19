@@ -53,7 +53,29 @@ export function createApp(basePath = process.env.BASE_PATH ?? ""): McpApp {
 
   app.get(
     `${basePath}/sse`,
-    async (_req: express.Request, res: express.Response) => {
+    async (req: express.Request, res: express.Response) => {
+      // A Streamable HTTP client (identified by the session header it carries) may open a GET
+      // here after initializing over POST, to receive server-initiated push notifications on
+      // the same session. Legacy clients never send this header, so its absence means "open a
+      // new legacy SSE stream" as before.
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      if (sessionId) {
+        const transport = transports[sessionId];
+        if (!(transport instanceof StreamableHTTPServerTransport)) {
+          res.status(400).json({
+            jsonrpc: "2.0",
+            error: {
+              code: -32000,
+              message: "Bad Request: No valid session ID provided",
+            },
+            id: null,
+          });
+          return;
+        }
+        await transport.handleRequest(req, res);
+        return;
+      }
+
       logger.info("Received legacy SSE connection request");
       const transport = new SSEServerTransport(`${basePath}/messages`, res);
       transports[transport.sessionId] = transport;

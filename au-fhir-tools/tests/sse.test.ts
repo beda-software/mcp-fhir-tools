@@ -145,6 +145,70 @@ describe("MCP HTTP transports", () => {
       expect(response.status).toBe(400);
       await client.close();
     });
+
+    test("a GET carrying the session id opens the notification stream on that session rather than a new legacy session", async () => {
+      // Initialize with a raw request (not the SDK client transport, which would open its own
+      // standalone GET stream on connect and leave no room for the one this test opens itself).
+      const initResponse = await fetch(baseUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "test-client", version: "0.0.1" },
+          },
+        }),
+      });
+      const sessionId = initResponse.headers.get("mcp-session-id");
+      expect(sessionId).toBeTruthy();
+
+      const controller = new AbortController();
+      const response = await fetch(baseUrl, {
+        method: "GET",
+        headers: {
+          Accept: "text/event-stream",
+          "mcp-session-id": sessionId as string,
+        },
+        signal: controller.signal,
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain(
+        "text/event-stream",
+      );
+
+      // The legacy handler would have written an "endpoint" event immediately; the Streamable
+      // HTTP notification stream never does, confirming this GET took the Streamable path.
+      const reader = response.body!.getReader();
+      const firstChunk = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true; value: undefined }>((resolve) =>
+          setTimeout(() => resolve({ done: true, value: undefined }), 300),
+        ),
+      ]);
+      if (!firstChunk.done && firstChunk.value) {
+        const text = new TextDecoder().decode(firstChunk.value);
+        expect(text).not.toContain("event: endpoint");
+      }
+      controller.abort();
+    });
+
+    test("rejects a GET carrying an unrecognised session id", async () => {
+      const response = await fetch(baseUrl, {
+        method: "GET",
+        headers: {
+          Accept: "text/event-stream",
+          "mcp-session-id": "does-not-exist",
+        },
+      });
+      expect(response.status).toBe(400);
+    });
   });
 
   describe("Legacy HTTP+SSE transport (GET /sse + POST /messages)", () => {
