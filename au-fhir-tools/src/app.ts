@@ -70,6 +70,10 @@ export function createApp(basePath = process.env.BASE_PATH ?? ""): McpApp {
   const app = express();
   app.use(express.json());
 
+  app.get("/health", (req, res) => {
+    res.sendStatus(200);
+  });
+
   // Sessions are tracked by ID across both transports, so that /messages and /sse (POST/DELETE)
   // requests can be routed back to the transport that owns them.
   const transports: Record<string, Transport> = {};
