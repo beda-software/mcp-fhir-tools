@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-var-requires */
-
 /*
  * Copyright 2025 Commonwealth Scientific and Industrial Research Organisation (CSIRO) ABN 41 687 119 230
  *
@@ -16,13 +14,26 @@
  * limitations under the License.
  */
 
-import { ChildProcess } from "child_process";
-import server from "../src/server";
+import type { ChildProcess } from "child_process";
+import { jest } from "@jest/globals";
+
+// server.ts calls child_process.execFile to run the FHIR validator JAR. Under real ESM, Jest
+// can't monkey-patch a module namespace object (it's frozen), so the module has to be mocked
+// before it's imported, and anything that transitively imports it (server.ts) has to be pulled
+// in afterwards via a dynamic import rather than a static one.
+const execFileMock = jest.fn();
+jest.unstable_mockModule("child_process", () => ({
+  execFile: execFileMock,
+}));
+
+const { default: createServer } = await import("../src/server");
 
 describe("FHIR Tools", () => {
+  const server = createServer();
+
   test("generate-uuid returns a valid UUID v4", async () => {
     const tool = server["_registeredTools"]["generate-uuid"];
-    const result = await tool.callback({});
+    const result = await tool.handler({});
     expect(result.content[0].text).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
@@ -30,26 +41,24 @@ describe("FHIR Tools", () => {
 
   describe("validate tool", () => {
     afterEach(() => {
-      jest.restoreAllMocks();
+      execFileMock.mockReset();
     });
 
     test("returns warnings and errors when validator outputs lines", async () => {
-      // Stub exec so that it returns simulated warnings/errors.
-      jest
-        .spyOn(require("child_process"), "exec")
-        .mockImplementation((...args: unknown[]) => {
-          const callback = args[args.length - 1] as (
-            error: Error | null,
-            stdout: string,
-            stderr: string,
-          ) => void;
-          process.nextTick(() =>
-            callback(null, "Warning: Something is off\nError: Fake error", ""),
-          );
-          return {} as ChildProcess;
-        });
+      // Stub execFile so that it returns simulated warnings/errors.
+      execFileMock.mockImplementation((...args: unknown[]) => {
+        const callback = args[args.length - 1] as (
+          error: Error | null,
+          stdout: string,
+          stderr: string,
+        ) => void;
+        process.nextTick(() =>
+          callback(null, "Warning: Something is off\nError: Fake error", ""),
+        );
+        return {} as ChildProcess;
+      });
       const tool = server["_registeredTools"]["validate"];
-      const response = await tool.callback({
+      const response = await tool.handler({
         resource: "{}",
         fhirVersion: "4.0.1",
         snomedVersion: "intl",
@@ -58,20 +67,18 @@ describe("FHIR Tools", () => {
       expect(response.content[0].text).toContain("Error: Fake error");
     });
 
-    test("returns an error when exec fails", async () => {
-      jest
-        .spyOn(require("child_process"), "exec")
-        .mockImplementation((...args: unknown[]) => {
-          const callback = args[args.length - 1] as (
-            error: Error | null,
-            stdout: string,
-            stderr: string,
-          ) => void;
-          process.nextTick(() => callback(new Error("Exec failed"), "", ""));
-          return {} as unknown;
-        });
+    test("returns an error when execFile fails", async () => {
+      execFileMock.mockImplementation((...args: unknown[]) => {
+        const callback = args[args.length - 1] as (
+          error: Error | null,
+          stdout: string,
+          stderr: string,
+        ) => void;
+        process.nextTick(() => callback(new Error("Exec failed"), "", ""));
+        return {} as ChildProcess;
+      });
       const tool = server["_registeredTools"]["validate"];
-      const response = await tool.callback({
+      const response = await tool.handler({
         resource: "{}",
         fhirVersion: "4.0.1",
         snomedVersion: "intl",

@@ -16,14 +16,14 @@
  */
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import server from "./server.js";
+import createServer from "./server.js";
 
 const logger = console;
 
 async function runServer() {
   try {
     const transport = new StdioServerTransport(process.stdin, process.stdout);
-    await server.connect(transport);
+    await createServer().connect(transport);
   } catch (error) {
     logger.error(
       `Failed to start server:\n${JSON.stringify(getErrorDetails(error), null, 2)}`,
