@@ -1,0 +1,252 @@
+/*
+ * Copyright 2025 Commonwealth Scientific and Industrial Research Organisation (CSIRO) ABN 41 687 119 230
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { randomUUID } from "node:crypto";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import express from "express";
+import createServer from "./server.js";
+
+const logger = console;
+
+type Transport = SSEServerTransport | StreamableHTTPServerTransport;
+
+export interface McpApp {
+  app: express.Express;
+  /** Closes every open transport (both legacy SSE and Streamable HTTP sessions). */
+  closeAllTransports: () => Promise<void>;
+}
+
+/**
+ * Express 4 does not forward a rejected promise from an async handler to error middleware, so an
+ * uncaught throw inside a route handler becomes an unhandled rejection that crashes the whole
+ * process, taking every other client's session down with it. Every route below therefore wraps
+ * its body in try/catch and reports failures through this instead of letting them escape.
+ */
+function respondWithInternalError(
+  logMessage: string,
+  error: unknown,
+  res: express.Response,
+): void {
+  logger.error(logMessage, error);
+  if (res.headersSent) {
+    if (!res.writableEnded) res.end();
+    return;
+  }
+  res.status(500).json({
+    jsonrpc: "2.0",
+    error: { code: -32603, message: "Internal server error" },
+    id: null,
+  });
+}
+
+/**
+ * Builds the Express app serving the MCP HTTP transports, isolated from process-level concerns
+ * (listening on a port, OS signal handling) so it can be exercised directly in tests.
+ *
+ * Exposes both:
+ * - The legacy HTTP+SSE transport (protocol version 2024-11-05), kept for backwards compatibility
+ *   with older clients: GET opens the stream; the client then POSTs JSON-RPC messages to the
+ *   `${basePath}/messages` endpoint advertised in the `endpoint` SSE event.
+ * - The Streamable HTTP transport (current MCP spec), used by modern clients such as the OpenAI
+ *   Responses API `mcp` tool. Exposed on the same `${basePath}/sse` path as the legacy transport
+ *   (GET keeps the legacy meaning) so that existing client configuration keeps working.
+ */
+export function createApp(basePath = process.env.BASE_PATH ?? ""): McpApp {
+  const app = express();
+  app.use(express.json());
+
+  app.get("/health", (req, res) => {
+    res.sendStatus(200);
+  });
+
+  // Sessions are tracked by ID across both transports, so that /messages and /sse (POST/DELETE)
+  // requests can be routed back to the transport that owns them.
+  const transports: Record<string, Transport> = {};
+
+  app.get(`${basePath}/sse`, async (req, res) => {
+    try {
+      // A Streamable HTTP client (identified by the session header it carries) may open a GET
+      // here after initializing over POST, to receive server-initiated push notifications on
+      // the same session. Legacy clients never send this header, so its absence means "open a
+      // new legacy SSE stream" as before.
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      if (sessionId) {
+        const transport = transports[sessionId];
+        if (!(transport instanceof StreamableHTTPServerTransport)) {
+          res.status(400).json({
+            jsonrpc: "2.0",
+            error: {
+              code: -32000,
+              message: "Bad Request: No valid session ID provided",
+            },
+            id: null,
+          });
+          return;
+        }
+        await transport.handleRequest(req, res);
+        return;
+      }
+
+      logger.info("Received legacy SSE connection request");
+      const transport = new SSEServerTransport(`${basePath}/messages`, res);
+      transports[transport.sessionId] = transport;
+      res.on("close", () => {
+        delete transports[transport.sessionId];
+      });
+      try {
+        await createServer().connect(transport);
+      } catch (error) {
+        delete transports[transport.sessionId];
+        throw error;
+      }
+      logger.info(`Legacy SSE transport connected: ${transport.sessionId}`);
+    } catch (error) {
+      respondWithInternalError("Error handling GET /sse request:", error, res);
+    }
+  });
+
+  app.post(`${basePath}/messages`, async (req, res) => {
+    try {
+      logger.debug("Received message", req);
+      const sessionId = req.query.sessionId as string | undefined;
+      const transport = sessionId ? transports[sessionId] : undefined;
+
+      if (!(transport instanceof SSEServerTransport)) {
+        res.status(400).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32000,
+            message:
+              "Bad Request: No SSE connection found for the given sessionId",
+          },
+          id: null,
+        });
+        return;
+      }
+
+      await transport.handlePostMessage(req, res, req.body);
+    } catch (error) {
+      respondWithInternalError(
+        "Error handling POST /messages request:",
+        error,
+        res,
+      );
+    }
+  });
+
+  app.post(`${basePath}/sse`, async (req, res) => {
+    let newTransport: StreamableHTTPServerTransport | undefined;
+    try {
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      let transport = sessionId ? transports[sessionId] : undefined;
+
+      if (transport && !(transport instanceof StreamableHTTPServerTransport)) {
+        res.status(400).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32000,
+            message:
+              "Bad Request: Session exists but uses a different transport protocol",
+          },
+          id: null,
+        });
+        return;
+      }
+
+      if (!transport) {
+        if (sessionId || !isInitializeRequest(req.body)) {
+          res.status(400).json({
+            jsonrpc: "2.0",
+            error: {
+              code: -32000,
+              message: "Bad Request: No valid session ID provided",
+            },
+            id: null,
+          });
+          return;
+        }
+
+        newTransport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (id) => {
+            logger.info(`Streamable HTTP session initialized: ${id}`);
+            transports[id] = newTransport as StreamableHTTPServerTransport;
+          },
+        });
+        newTransport.onclose = () => {
+          const id = newTransport?.sessionId;
+          if (id) {
+            logger.info(`Streamable HTTP transport closed: ${id}`);
+            delete transports[id];
+          }
+        };
+        await createServer().connect(newTransport);
+        transport = newTransport;
+      }
+
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      if (newTransport?.sessionId) {
+        delete transports[newTransport.sessionId];
+      }
+      respondWithInternalError("Error handling POST /sse request:", error, res);
+    }
+  });
+
+  app.delete(`${basePath}/sse`, async (req, res) => {
+    try {
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      const transport = sessionId ? transports[sessionId] : undefined;
+
+      if (!(transport instanceof StreamableHTTPServerTransport)) {
+        res
+          .status(400)
+          .send(
+            "No active Streamable HTTP session found for the given session ID",
+          );
+        return;
+      }
+
+      await transport.handleRequest(req, res);
+    } catch (error) {
+      respondWithInternalError(
+        "Error handling DELETE /sse request:",
+        error,
+        res,
+      );
+    }
+  });
+
+  const closeAllTransports = async () => {
+    await Promise.all(
+      Object.entries(transports).map(async ([sessionId, transport]) => {
+        try {
+          await transport.close();
+        } catch (error) {
+          logger.error(
+            `Error closing transport for session ${sessionId}:`,
+            error,
+          );
+        }
+        delete transports[sessionId];
+      }),
+    );
+  };
+
+  return { app, closeAllTransports };
+}

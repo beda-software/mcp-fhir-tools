@@ -15,11 +15,13 @@
  */
 
 import fetch from "node-fetch";
-import server from "../src/server";
+import createServer from "../src/server";
 
 jest.mock("node-fetch", () => jest.fn());
 
 describe("Terminology Tools", () => {
+  const server = createServer();
+
   afterEach(() => {
     jest.resetAllMocks();
   });
@@ -30,7 +32,7 @@ describe("Terminology Tools", () => {
       json: async () => ({ expansion: { contains: [] } }),
     });
     const tool = server["_registeredTools"]["lookup-code"];
-    const response = await tool.callback({
+    const response = await tool.handler({
       filter: "hypertension",
       url: "http://snomed.info/sct?fhir_vs",
     });
@@ -44,7 +46,7 @@ describe("Terminology Tools", () => {
       json: async () => ({ expansion: { contains: [firstMatch] } }),
     });
     const tool = server["_registeredTools"]["lookup-code"];
-    const response = await tool.callback({
+    const response = await tool.handler({
       filter: "hypertension",
       url: "http://snomed.info/sct?fhir_vs",
     });
@@ -60,7 +62,7 @@ describe("Terminology Tools", () => {
       text: async () => "Server Error",
     });
     const tool = server["_registeredTools"]["lookup-code"];
-    const response = await tool.callback({
+    const response = await tool.handler({
       filter: "hypertension",
       url: "http://snomed.info/sct?fhir_vs",
     });
@@ -94,7 +96,7 @@ describe("Terminology Tools", () => {
     });
 
     const tool = server["_registeredTools"]["validate-code"];
-    const response = await tool.callback({
+    const response = await tool.handler({
       system: "http://snomed.info/sct",
       code: "30371007",
       url: "http://snomed.info/sct?fhir_vs",
@@ -122,7 +124,7 @@ describe("Terminology Tools", () => {
     });
 
     const tool = server["_registeredTools"]["validate-code"];
-    const response = await tool.callback({
+    const response = await tool.handler({
       system: "http://snomed.info/sct",
       code: "invalid-code",
       url: "http://snomed.info/sct?fhir_vs",
@@ -150,7 +152,7 @@ describe("Terminology Tools", () => {
     });
 
     const tool = server["_registeredTools"]["validate-code"];
-    const response = await tool.callback({
+    const response = await tool.handler({
       system: "http://loinc.org",
       code: "72133-2",
       url: "http://loinc.org/vs",
@@ -169,7 +171,7 @@ describe("Terminology Tools", () => {
     });
 
     const tool = server["_registeredTools"]["validate-code"];
-    const response = await tool.callback({
+    const response = await tool.handler({
       system: "http://snomed.info/sct",
       code: "12345",
       url: "http://invalid-valueset-url",
