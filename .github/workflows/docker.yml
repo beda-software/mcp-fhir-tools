@@ -75,4 +75,4 @@ jobs:
           context: ${{ matrix.package }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: bedasoftware/mcp-${{ matrix.package }}:latest
+          tags: ${{ vars.DOCKERHUB_ORGANIZATION_USERNAME }}/mcp-${{ matrix.package }}:latest
